@@ -27,10 +27,11 @@
   实测输出：16 f1 04 握手帧、PSK_ACCESS/PSK_REFRESH 密钥、seal 明文/nonce
   复测记录：FRAME=144/45s、PSK=84 次（spawn 后自动触发）
 
-阶段 3：复刻 0x04 握手（未完成，依赖阶段 2 数据 + 专项分析）
-  用捕获的握手帧序列还原 ClientHello/ServerHello/密钥派生全流程
-  对齐 Go 库：当前 0x03 握手可跑通，需新增 0x04 模式
-  ⚠ 需要：微信登录态（否则握手帧在登录后不再出现，仅启动期 1 次）
+阶段 3：复刻 0x04 协议层（协议已逆向，Go 库对齐未完成）
+  ✅ 协议层文档：docs/weixin-mmtls-re/07-full-protocol.md
+     帧格式/AAD/明文记录/zlib/HTTP-2/密钥派生/PSK 全链路实测
+  ⏳ Go 库对齐：新增 0x04 模式（magic 16f104、4B 长度前缀明文封装）
+  ⚠ 需要：微信登录态（否则握手帧仅启动期 1 次）
 
 阶段 4：提取登录态（未开始）
   定位登录凭证存储（mmtls_client_credential_storage.cpp 对应代码）
