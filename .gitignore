@@ -8,3 +8,5 @@
 # 编译产物
 /mmtls.exe
 /mmtls
+__pycache__/
+*.pyc
