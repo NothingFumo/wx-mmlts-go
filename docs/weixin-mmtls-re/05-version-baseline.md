@@ -30,6 +30,10 @@
 | 发送函数（send 调用点） | 0x490CA36 | 0x18490CA36 | `call cs:send`（IAT → ws2_32!send），rdx=密文缓冲 |
 | 发送大函数入口 | 0x490B0A6 | 0x18490B0A6 | LongLinkWithMMTLS 发送路径 |
 | 接收函数（recv 调用点） | 0x490CD4F | 0x18490CD4F | `call cs:recv` |
+| PSK 存储（SaveRefreshPskToFile 日志点） | 0x6447A9 | 0x186447A9 | mmtls_client_credential_storage.cpp |
+| PSK 存储（InitPskKeys 日志点） | 0x645A25 | 0x186445A25 | 同上 |
+| PSK 存储（LoadRefreshPskFromFile 日志点） | 0x64562DD | 0x1864562DD | 同上 |
+| PSK 存储（MAX_SERIALIZED_PSK_LEN 日志点） | 0x645FFFF | 0x18645FFFF | 同上 |
 
 ## 4. 密钥派生标签（.rdata）
 
