@@ -8,8 +8,8 @@
 **定位方法**：运行时内存扫描 `PSK_ACCESS` 字符串（0x188d3e678）→
 扫描 `.text` 中 rip-relative `lea` 引用 → 命中 0x185c6930d。
 
-**签名**：`int sub_185C691A0(MmtlsChannel* this, bool isAccess, void* out)`
-（rcx=this, edx=1 表示 PSK_ACCESS / 0 表示 PSK_REFRESH, r8=输出结构）
+**签名**：`int sub_185C691A0(MmtlsChannel* this, int mode, void* out)`
+（rcx=this, edx=mode: **1=PSK_ACCESS, 2=PSK_REFRESH**（实测枚举），r8=输出结构）
 
 **流程**（反汇编还原）：
 ```
@@ -18,14 +18,26 @@ r13 = r8; r15d = edx; rsi = rcx
 cmp r15b, 1
 lea rax, "PSK_ACCESS"
 lea r12, "PSK_REFRESH"
-cmovz r12, rax                    ; 选择标签
+cmovz r12, rax                    ; mode==1 选 PSK_ACCESS
 r14 = 0x0b（标签长度 11）
 [构造 HKDF info = 标签 || 握手哈希]
 ; 虚函数调用: [rsi+0E8h] -> vtable+0x20
 ; rdx = [rsi+0A8h]  （PRK 输入）
 ; r9d = 0x20          （输出 32 字节）
 ; HKDF-Expand(SHA256, key, info, 32)
-; 输出 -> [r13+10h]  （32 字节密钥写入 out 结构偏移 0x10）
+```
+
+**输出结构**（out，r8，实测 dump）：
+| 偏移 | 内容 |
+|---|---|
+| +0x00 | 描述结构指针（含长度字段） |
+| +0x08 | **32 字节密钥缓冲区指针**（PSK_ACCESS / PSK_REFRESH） |
+| +0x10 | 32（长度） |
+
+**实测密钥样例**（spawn 启动抓取）：
+```
+mode=1 PSK_ACCESS: f8b762dd837d0d616ab30a3238187b0335feec275087f4c0fe68bbb04fa2d0a7
+mode=2 PSK_REFRESH: a504a9ffbdfba058dfbf293723f05ff7d1340a5a9e94f542fe9cf30e8b024d94
 ```
 
 **与 Go 实现一致性**：
