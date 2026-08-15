@@ -56,7 +56,19 @@ binary.BigEndian.PutUint16(auddit[11:], pkt.length) // 2B
 | 0x14 | Finished（32B 验证数据） | `00000023 14 0020 <32B HMAC>` | ✅ clientFinal `buf.WriteByte(0x14)` |
 | 0x00 | 短确认消息 | `00000003 00010100` | — |
 | 0x10 | 控制消息 | `00000010 00100001 00000006 ffffffff` | — |
-| — | 握手消息（208B，含 4B 序号 + 32B 随机） | `000000d0 000000a4 0200278d 000020c6 <32B random>...` | 结构待字段级解析 |
+| — | ClientHello（208B，5 样本差分） | `000000d0 000000a4 0200278d 000020XX <32B random>...` | 序号 4B + 随机 32B 已确认；`000000a4`/`0200278d` 语义待定 |
+
+### ClientHello（len=208）字段观察
+
+5 次独立捕获样本差分（仅序号与 32B 随机变化，其余固定）：
+```
+000000d0  消息长度 208（4B BE）
+000000a4  固定字段（164，语义待定）
+0200278d  固定字段（语义待定）
+000020XX  序号（4B，样本 8390/8351/8423/8670/8666 递增）
+[32B 随机数]
+[160B 剩余：扩展区（含 ECDH 公钥/时间戳等，未逐字段解析）]
+```
 
 ## 4. 业务层：二进制请求格式 over MMTLS（实测修正）
 
@@ -104,11 +116,30 @@ binary.BigEndian.PutUint16(auddit[11:], pkt.length) // 2B
 mars stn（长连接/短连接调度）
   └─ mmtls2（mmtls2_client_channel + BoringSSL SSL_CTX）
        └─ EncryptRecord（0x186450C00）→ seal（0x1866C3080）
-            └─ GCM 原语（0x342F810）三连调用：
-               1. AAD 设置（seq+magic+len）
-               2. 数据加密（明文→密文）
-               3. 收尾（输出）
+            └─ OpenSSL EVP 封装（0x1848ED080 区，evp_enc.c）→ 0x342F810
 ```
+
+### 0x342F810：crypto util 分发函数（认知修正）
+
+0x342F810 原从 EVP_CIPHER.do_cipher 指针定位，实测为**微信 crypto util 总入口**
+（mmtls_openssl_crypto_util.cpp 编译产物）：a4（第 5 参）为操作码，
+数据缓冲（a2）承载多种操作：
+
+- GCM AAD 帧头：`0000000000000001 16f104 0037 ...`（seq+magic+len）
+- GCM 明文/密文：zlib 数据、长度前缀消息、高熵密文
+- HKDF info 构造：缓冲尾部出现 `657870616e73696f6e`（"expansion" 标签片段）
+
+### 方向标注（backtrace 调用者分组实测）
+
+| 调用者 | 调用数 | 角色 |
+|---|---|---|
+| 0x7FFD860CD66D | 86 | 数据加解密（明文/密文在 a2 就地缓冲） |
+| 0x7FFD860CCF4D | 85 | AAD 设置 + 数据（含 16f104/17f104 帧头） |
+| 0x7FFD860CD0F4 | 44 | 收尾 |
+| 0x7FFD860CD24B | 43 | 收尾 |
+
+加解密共用同一分发函数，输入输出为就地缓冲（in-place），
+明文与密文均可在 a2 观察。
 
 ## 7. 发送链（实测 backtrace）
 
@@ -132,8 +163,7 @@ mars stn（长连接/短连接调度）
 
 ## 9. 未覆盖项（诚实声明）
 
-- 服务器→客户端方向解密明文逐条标注（GCM 原语双向处理，明文可见但未逐条归向）
 - 业务帧扩展字段语义（`000001ffbf92c0f2` 尾段，疑为会话/序号）
 - 0-RTT early data 具体载荷
-- 握手消息（len=208）字段级结构：已确认 4B 序号 + 32B 随机数存在，其余字段
-  （`000000a4`、`0200278d` 语义）待反汇编 mmtls_handshake_messages.cpp 编解码确认
+- ClientHello 字段 `000000a4`/`0200278d` 语义与扩展区逐字段解析
+  （需反汇编 mmtls_handshake_messages.cpp 编解码函数确认）
