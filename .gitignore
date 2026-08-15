@@ -1,6 +1,10 @@
 # 运行时产物
 /session
 
+# 抓包输出
+/capture.jsonl
+/capture-*.jsonl
+
 # 编译产物
 /mmtls.exe
 /mmtls
