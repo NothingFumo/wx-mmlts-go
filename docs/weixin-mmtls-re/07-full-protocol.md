@@ -105,7 +105,22 @@ len=208  固定164  固定      序号     随机数        子长72  nonce长12
 已知 CGI：
 - `/cgi-bin/micromsg-bin/newgetdns?uin=0&clientversion=4065597983&scene=5&net...`（DNS 配置）
 - `/cgi-bin/micromsg-bin/newreportkvcommrsa`（KV 上报）
-- 主机：`minorshort.weixin.qq.com`
+- 主机：`minorshort.weixin.qq.com` / `szminorshort.weixin.qq.com`（sz 前缀变体）
+
+### 业务帧结构细化（1024B 缓冲实测）
+
+```
+类型 0x01（DNS 请求）: 0000019e | 01 | 82? | /cgi-bin/micromsg-bin/newgetdns?uin=0&...
+                        len=0x19e  类型  flags   明文路径（无长度前缀）
+类型 0x00（上报）:     0000024a | 00 | 28 | <40B path> | 001a | <26B host> | 扩展
+                       len=0x24a  类型  路径长         主机长
+请求标识:              00100001 前缀（与 len=16 控制消息一致，疑为会话/请求类型）
+proto 载荷:            08 01 12 46 08 9f 03 ...（protobuf 字段可见）
+固定连接标识:          bf92c0f2（跨多次捕获重复出现，非随机）
+```
+
+> 修正：早期观察的 `000001ffbf92c0f2` 业务帧尾部字段中，
+> `bf92c0f2` 为跨捕获固定连接标识；其余尾部为缓冲残留（非帧内容）。
 
 ## 5. 密钥派生（PSK 实测）
 
@@ -173,7 +188,9 @@ mars stn（长连接/短连接调度）
 
 ## 9. 未覆盖项（诚实声明）
 
-- 业务帧扩展字段语义（`000001ffbf92c0f2` 尾段，疑为会话/序号）
 - 0-RTT early data 具体载荷
 - 会话票据消息 `000000a4`/`0200278d` 固定字段语义与 60B 数据区内容
-- UA 扩展前字段（`0699000d0080`）语义
+- UA 扩展前字段（`002e`/`000b0088` 变长字段）语义
+- 业务帧 flags（0x82）与 proto 载荷完整解码
+- 这些均需 mmtls2_client_channel.cpp / mmtls_handshake_messages.cpp
+  编解码反汇编或登录态下的定向捕获（专项环境）
