@@ -38,6 +38,7 @@ type MMTLSClient struct {
 	handshakeHasher                              hash.Hash
 	handshakeReader                              io.Reader
 	handshakeServerSeqNum, handshakeClientSeqNum byte
+	appClientSeqNum, appServerSeqNum               uint64
 
 	Session *Session
 }
@@ -533,7 +534,12 @@ func (this *MMTLSClient) Handshake() error {
 			}
 			fmt.Println("        ✓ 新会话已创建")
 		} else {
-			fmt.Println("        ✓ 使用已有会话")
+			// PSK 恢复模式：更新应用数据密钥（每次握手重新派生）
+			this.Session.tk = ex
+			this.Session.PskAccess = pskAccess
+			this.Session.earlyKey = earlyPair
+			this.Session.applicationKey = keyExchange
+			fmt.Println("        ✓ 使用已有会话 (应用密钥已更新)")
 		}
 
 		// fully complete handshake
@@ -544,3 +550,79 @@ func (this *MMTLSClient) Handshake() error {
 
 	return nil
 }
+
+// sendAppGCM 应用层加密发送（独立序列号）
+func (this *MMTLSClient) sendAppGCM(pkt *mmtlsPackage) error {
+	c, err := aes.NewCipher(this.Session.applicationKey.ClientKey)
+	if err != nil {
+		return err
+	}
+	aead, err := cipher.NewGCM(c)
+	if err != nil {
+		return err
+	}
+	nonce := make([]byte, 12)
+	copy(nonce, this.Session.applicationKey.ClientNonce)
+	nonce[11] = nonce[11] ^ byte(this.appClientSeqNum)
+	auddit := make([]byte, 13)
+	binary.BigEndian.PutUint64(auddit, this.appClientSeqNum)
+	copy(auddit[8:], pkt.magic)
+	binary.BigEndian.PutUint16(auddit[11:], pkt.length)
+	pkt.reset(aead.Seal(nil, nonce, pkt.data, auddit))
+	if err := this.sendPackage(pkt); err != nil {
+		return err
+	}
+	this.appClientSeqNum++
+	return nil
+}
+
+// readAppGCM 应用层解密读取（独立序列号）
+func (this *MMTLSClient) readAppGCM(pkt *mmtlsPackage) ([]byte, error) {
+	c, err := aes.NewCipher(this.Session.applicationKey.ServerKey)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(c)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, 12)
+	copy(nonce, this.Session.applicationKey.ServerNonce)
+	nonce[11] = nonce[11] ^ byte(this.appServerSeqNum)
+	auddit := make([]byte, 13)
+	binary.BigEndian.PutUint64(auddit, this.appServerSeqNum)
+	copy(auddit[8:], pkt.magic)
+	binary.BigEndian.PutUint16(auddit[11:], pkt.length)
+	dst, err := aead.Open(nil, nonce, pkt.data, auddit)
+	if err != nil {
+		return nil, err
+	}
+	this.appServerSeqNum++
+	return dst, nil
+}
+
+// SendAppData 发送应用数据（magic 0x17）并读取响应（实验性）
+func (this *MMTLSClient) SendAppData(plaintext []byte) ([]byte, error) {
+	if !this.handshakeComplete() {
+		return nil, fmt.Errorf("handshake not complete")
+	}
+	pkt := buildPackage([]byte{0x17, 0xf1, 0x04}, plaintext)
+	if err := this.sendAppGCM(pkt); err != nil {
+		return nil, err
+	}
+	resp, err := this.readPackage(this.conn)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("  [APP-RESP] magic=%x len=%d\n", resp.magic, resp.length)
+	if resp.magic[0] == 0x16 || resp.magic[0] == 0x19 {
+		return resp.data, nil
+	}
+	dec, err := this.readAppGCM(resp)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt fail: %v (raw=%x)", err, resp.data[:min(64, len(resp.data))])
+	}
+	return dec, nil
+}
+
+func min(a, b int) int { if a < b { return a }; return b }
