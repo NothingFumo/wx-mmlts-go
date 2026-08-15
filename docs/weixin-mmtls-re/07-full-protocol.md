@@ -56,19 +56,29 @@ binary.BigEndian.PutUint16(auddit[11:], pkt.length) // 2B
 | 0x14 | Finished（32B 验证数据） | `00000023 14 0020 <32B HMAC>` | ✅ clientFinal `buf.WriteByte(0x14)` |
 | 0x00 | 短确认消息 | `00000003 00010100` | — |
 | 0x10 | 控制消息 | `00000010 00100001 00000006 ffffffff` | — |
-| — | ClientHello（208B，5 样本差分） | `000000d0 000000a4 0200278d 000020XX <32B random>...` | 序号 4B + 随机 32B 已确认；`000000a4`/`0200278d` 语义待定 |
+| — | 会话票据消息（208B） | `000000d0 000000a4 0200278d 000020XX <32B random> 00000048 000c <12B nonce> <60B>` | nonce 结构已确认 |
+| — | UA 扩展 | Finished 后接 `"UnifiedPCWindows 10 x86_64"` | — |
 
-### ClientHello（len=208）字段观察
+### ClientHello / 票据消息结构观察（连续缓冲，多消息拼接）
 
-5 次独立捕获样本差分（仅序号与 32B 随机变化，其余固定）：
+**ClientHello 片段**（len=35，type 0x14 Finished + UA 扩展）：
 ```
-000000d0  消息长度 208（4B BE）
-000000a4  固定字段（164，语义待定）
-0200278d  固定字段（语义待定）
-000020XX  序号（4B，样本 8390/8351/8423/8670/8666 递增）
-[32B 随机数]
-[160B 剩余：扩展区（含 ECDH 公钥/时间戳等，未逐字段解析）]
+00000023 14 0020 <32B HMAC> 0699000d0080 556e6966696564504357696e646f7773203130207838365f3634
+len=35  type=0x14(Finished) 32B验证数据  UA="UnifiedPCWindows 10 x86_64"
 ```
+→ v4 ClientHello 内含 Finished 验证字段 + 客户端 UA 扩展（对应旧版扩展区）。
+
+**会话票据消息**（len=208，2 样本差分）：
+```
+000000d0 000000a4 0200278d 000020de <32B random> 00000048 000c <12B nonce> <60B data>
+len=208  固定164  固定      序号     随机数        子长72  nonce长12  nonce    数据
+```
+→ 含 nonce（12B）与高熵数据，结构对应会话票据/PSK 更新消息（mmtls_client_psk.cpp）。
+
+**AAD 缓冲与 HKDF info 共存**：部分调用的 d2 缓冲在 AAD 帧头
+（`seq+16f104+len`）后紧邻 `657870616e73696f6e`（"expansion" 标签片段）——
+0x342F810 缓冲承载多数据流（AAD、明文消息、HKDF info），
+确认其为 crypto util 总入口而非单一 GCM 操作。
 
 ## 4. 业务层：二进制请求格式 over MMTLS（实测修正）
 
@@ -165,5 +175,5 @@ mars stn（长连接/短连接调度）
 
 - 业务帧扩展字段语义（`000001ffbf92c0f2` 尾段，疑为会话/序号）
 - 0-RTT early data 具体载荷
-- ClientHello 字段 `000000a4`/`0200278d` 语义与扩展区逐字段解析
-  （需反汇编 mmtls_handshake_messages.cpp 编解码函数确认）
+- 会话票据消息 `000000a4`/`0200278d` 固定字段语义与 60B 数据区内容
+- UA 扩展前字段（`0699000d0080`）语义
